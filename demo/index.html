@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Push Express — Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 0 auto; padding: 1.5rem; background: #1a1a2e; color: #eee; min-height: 100vh; }
+    h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    .sub { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
+    input, select { width: 100%; padding: 0.6rem; margin-top: 0.25rem; border: 1px solid #333; border-radius: 6px; background: #16213e; color: #eee; font-size: 0.95rem; }
+    button { width: 100%; margin-top: 1.25rem; padding: 0.75rem 1rem; border: none; border-radius: 8px; font-size: 1rem; cursor: pointer; background: #0f3460; color: #eee; }
+    button:hover { background: #1a4a7a; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 1.5rem; padding: 1rem; border-radius: 8px; font-size: 0.9rem; background: #16213e; }
+    .status.ok { border-left: 4px solid #0f0; }
+    .status.err { border-left: 4px solid #f44; }
+    .status.pending { border-left: 4px solid #fa0; }
+    pre { margin: 0.5rem 0 0; padding: 0.75rem; background: #0d1117; border-radius: 6px; font-size: 0.75rem; color: #8b949e; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Push Express — Demo</h1>
+  <p class="sub">Тестовая страница для проверки Web Push уведомлений через наш сервис.</p>
+
+  <label>API Server</label>
+  <input type="text" id="apiBase" value="https://api.dev-push-expr.ivylab.group">
+
+  <label>App ID</label>
+  <input type="text" id="appId" value="2681" placeholder="ID приложения из админки">
+
+  <label>VAPID Public Key</label>
+  <input type="text" id="vapidKey" value="BKRlBI35dMbdaexzvarWSrF-JvyBfSrngAnM4BvwmwmGbMr2ru8BqNQuezsgKqMwsrVJ9JIfZ7HLFj4dL0vFzA0" placeholder="VAPID ключ из настроек приложения">
+
+  <button id="btnInit">Подключить и разрешить уведомления</button>
+
+  <div id="status" class="status pending">Нажми кнопку чтобы подписаться на push-уведомления.</div>
+
+  <div style="margin-top: 1rem;">
+    <strong style="font-size: 0.9rem;">Лог</strong>
+    <pre id="log"></pre>
+  </div>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+
+    function log(msg) {
+      const line = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+      logEl.textContent = (logEl.textContent ? logEl.textContent + '\n' : '') + line;
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(line);
+    }
+
+    function setStatus(msg, type) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + (type || 'pending');
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = atob(base64);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+    }
+
+    // Save config to IndexedDB for service worker
+    function saveConfigForSW(appId, icId, baseURL) {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('push_express', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('config'); };
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('config', 'readwrite');
+          tx.objectStore('config').put({ appId, icId, baseURL }, 'sdk_config');
+          tx.oncomplete = () => { db.close(); resolve(); };
+          tx.onerror = () => { db.close(); reject(tx.error); };
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // Listen for messages from SW
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'push_express_delivered') {
+          log('SW fallback: delivered event for msg_id=' + e.data.msg_id);
+        } else if (e.data && e.data.type === 'push_express_clicked') {
+          log('SW fallback: clicked event for msg_id=' + e.data.msg_id);
+        }
+      });
+    }
+
+    document.getElementById('btnInit').addEventListener('click', async () => {
+      const apiBase = document.getElementById('apiBase').value.trim();
+      const appId = document.getElementById('appId').value.trim();
+      const vapidKey = document.getElementById('vapidKey').value.trim();
+
+      if (!appId || !vapidKey) {
+        setStatus('Укажи App ID и VAPID key.', 'err');
+        return;
+      }
+
+      const btn = document.getElementById('btnInit');
+      btn.disabled = true;
+      setStatus('Подключение...', 'pending');
+
+      try {
+        const sdkBaseURL = apiBase + '/api/r/v2';
+
+        // 1. Generate ic_token
+        const icToken = localStorage.getItem('px_ic_token') || crypto.randomUUID();
+        localStorage.setItem('px_ic_token', icToken);
+        log('ic_token: ' + icToken);
+
+        // 2. Register instance
+        log('Регистрация инстанса...');
+        const regResp = await fetch(sdkBaseURL + '/apps/' + appId + '/instances', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ic_token: icToken })
+        });
+        const regData = await regResp.json();
+        log('Ответ регистрации: ' + JSON.stringify(regData));
+        const icId = String(regData.id);
+        if (!icId || icId === 'undefined') throw new Error('Не удалось получить ic_id: ' + JSON.stringify(regData));
+        localStorage.setItem('px_ic_id', icId);
+
+        // 3. Request notification permission
+        log('Запрос разрешения на уведомления...');
+        if ('Notification' in window && Notification.permission === 'default') {
+          const perm = await Notification.requestPermission();
+          log('Разрешение: ' + perm);
+        } else {
+          log('Текущее разрешение: ' + (Notification.permission || 'N/A'));
+        }
+
+        if ('Notification' in window && Notification.permission !== 'granted') {
+          setStatus('Уведомления не разрешены. Разреши в настройках браузера.', 'err');
+          btn.disabled = false;
+          return;
+        }
+
+        // 4. Register service worker
+        log('Регистрация Service Worker...');
+        const swReg = await navigator.serviceWorker.register('./push-express-sw.js');
+        await navigator.serviceWorker.ready;
+        log('Service Worker готов.');
+
+        // 5. Subscribe to Web Push
+        log('Подписка на Web Push (VAPID)...');
+        const subscription = await swReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer
+        });
+        log('Подписка создана: endpoint=' + subscription.endpoint.substring(0, 60) + '...');
+
+        // 6. Send device info
+        log('Отправка информации об устройстве...');
+        const infoResp = await fetch(sdkBaseURL + '/apps/' + appId + '/instances/' + icId + '/info', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transport_type: 'webpush',
+            transport_token: JSON.stringify(subscription.toJSON()),
+            platform_type: 'browser',
+            platform_name: navigator.userAgent.substring(0, 200),
+            lang: navigator.language.split('-')[0],
+            country: '',
+            tz_sec: -new Date().getTimezoneOffset() * 60,
+            tags: {},
+            onscreen_count: 0,
+            onscreen_sec: 0,
+            agent_name: 'push-express-demo@1.0.0'
+          })
+        });
+        const infoData = await infoResp.json();
+        log('Device info обновлен: ' + JSON.stringify(infoData));
+
+        // 7. Save config for SW (IndexedDB)
+        await saveConfigForSW(appId, icId, sdkBaseURL);
+        log('Конфиг сохранен в IndexedDB для Service Worker.');
+
+        setStatus('Готово! Устройство зарегистрировано (ic_id=' + icId + '). Теперь отправь push из админки: Send → Instant push → выбери приложение #' + appId + ' → аудитория "Все".', 'ok');
+
+      } catch (e) {
+        setStatus('Ошибка: ' + (e.message || e), 'err');
+        log('ОШИБКА: ' + (e.message || e));
+        if (e.stack) log(e.stack);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

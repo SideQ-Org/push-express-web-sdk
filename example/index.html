@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Push Express Demo</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 0 20px; }
+    button { padding: 12px 24px; font-size: 16px; cursor: pointer; margin: 8px 0; }
+    #status { padding: 12px; margin-top: 16px; border-radius: 4px; background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <h1>Push Express Web SDK Demo</h1>
+  <button id="init">Initialize Push</button>
+  <div id="status">Not initialized</div>
+
+  <script type="module">
+    import { initPushExpress } from '../dist/push-express-sdk.esm.js';
+
+    document.getElementById('init').onclick = async () => {
+      const status = document.getElementById('status');
+      try {
+        status.textContent = 'Initializing...';
+        const sdk = await initPushExpress({
+          appId: '5',
+          vapidKey: 'BIzf_JF3HUE8hTREgY44O4IGx-cGgaLib5f2WFPTi-tZFIXeHBev3BeTq8y8L47W3jseDCpJTgD3uyiu0a1UwMQ',
+          baseURL: 'http://localhost:8080/api/r/v2',
+        });
+        status.textContent = 'Initialized! IC ID: ' + sdk.getIcId();
+        status.style.background = '#d4edda';
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        status.style.background = '#f8d7da';
+      }
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "@pushexpress/web-sdk",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Push Express Web SDK for browser push notifications",
+  "main": "dist/push-express-sdk.js",
+  "module": "dist/push-express-sdk.esm.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^11.1.0",
+    "puppeteer": "^24.38.0",
+    "rollup": "^4.0.0",
+    "tslib": "^2.6.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
+  }
+}
